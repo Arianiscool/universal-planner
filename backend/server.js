@@ -17,11 +17,11 @@ app.get("/", (req, res) => {
 });
 
 app.get("/api/health", (req, res) => {
-  res.json({
-    status: "OK",
-    message: "Backend is working"
-  });
+  res.json({ status: "OK" });
 });
+
+// Connect authentication routes
+app.use("/api/auth", require("./auth"));
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
