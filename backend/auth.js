@@ -25,10 +25,16 @@ router.post("/register", async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 12);
 
     const result = await pool.query(
-      `INSERT INTO users (username, email, password_hash, display_name)
+      `INSERT INTO users
+       (username, email, password_hash, display_name)
        VALUES ($1, $2, $3, $4)
        RETURNING id, username, email, display_name, role`,
-      [username, email, passwordHash, displayName || username]
+      [
+        username.trim(),
+        email.trim().toLowerCase(),
+        passwordHash,
+        displayName || username
+      ]
     );
 
     res.status(201).json({
@@ -38,7 +44,7 @@ router.post("/register", async (req, res) => {
   } catch (error) {
     if (error.code === "23505") {
       return res.status(409).json({
-        error: "Username or email is already registered."
+        error: "Username or email already exists."
       });
     }
 
@@ -52,10 +58,17 @@ router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    if (!email || !password) {
+      return res.status(400).json({
+        error: "Email and password are required."
+      });
+    }
+
     const result = await pool.query(
-      `SELECT id, username, email, display_name, password_hash, role, status
+      `SELECT id, username, email, display_name,
+       password_hash, role, status
        FROM users WHERE email = $1`,
-      [email]
+      [email.trim().toLowerCase()]
     );
 
     const user = result.rows[0];
@@ -66,27 +79,83 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    const validPassword = await bcrypt.compare(
+    const valid = await bcrypt.compare(
       password,
       user.password_hash
     );
 
-    if (!validPassword) {
+    if (!valid) {
       return res.status(401).json({
         error: "Invalid email or password."
       });
     }
 
-    delete user.password_hash;
+    req.session.regenerate((error) => {
+      if (error) {
+        return res.status(500).json({
+          error: "Could not create login session."
+        });
+      }
 
-    res.json({
-      message: "Login successful!",
-      user
+      req.session.userId = user.id;
+
+      req.session.save((error) => {
+        if (error) {
+          return res.status(500).json({
+            error: "Could not save login session."
+          });
+        }
+
+        delete user.password_hash;
+        res.json({ message: "Login successful!", user });
+      });
     });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Login failed." });
   }
+});
+
+// Check current login
+router.get("/me", async (req, res) => {
+  try {
+    if (!req.session.userId) {
+      return res.status(401).json({
+        error: "Not logged in."
+      });
+    }
+
+    const result = await pool.query(
+      `SELECT id, username, email, display_name, role, status
+       FROM users WHERE id = $1`,
+      [req.session.userId]
+    );
+
+    const user = result.rows[0];
+
+    if (!user || user.status !== "active") {
+      return req.session.destroy(() => {
+        res.status(401).json({ error: "Account unavailable." });
+      });
+    }
+
+    res.json({ user });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Could not check login." });
+  }
+});
+
+// Logout
+router.post("/logout", (req, res) => {
+  req.session.destroy((error) => {
+    if (error) {
+      return res.status(500).json({ error: "Logout failed." });
+    }
+
+    res.clearCookie("connect.sid");
+    res.json({ message: "Logged out successfully." });
+  });
 });
 
 module.exports = router;
